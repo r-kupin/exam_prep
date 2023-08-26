@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
+#include <sys/wait.h>
 
 #define OK 0
 #define KO 1
@@ -9,9 +10,9 @@
 #define OUT 0
 #define IN 1
 
-#define PIPE 0
-#define BREAK 1
-#define END 2
+#define END 0
+#define PIPE 1
+#define BREAK 2
 
 typedef struct s_list_elem {
 	int     type;
@@ -28,6 +29,10 @@ int   ft_strlen(char *str) {
 			return i;
 }
 
+void print_err(char *str) {
+	write(STDERR_FILENO, str, ft_strlen(str)); /* dup2 fail */
+}
+
 void  free_list(cmd *list) {
 	cmd *prev;
 
@@ -39,15 +44,16 @@ void  free_list(cmd *list) {
 }
 
 int   push(char *av, cmd **list) {
-	printf("push command: %s\n", av);
-
 	cmd *elem = malloc(sizeof(cmd));
 	if (!elem)
 		return KO;
 	elem->type = END;
 	elem->argc = 1;
-	elem->argv = malloc(sizeof(char*));
+	elem->argv = malloc(sizeof(char*) * 2);
+	if (!elem->argv)
+		return KO;
 	elem->argv[0] = av;
+	elem->argv[1] = NULL;
 	elem->next = NULL;
 	if (!*list) {
 		elem->prev = NULL;
@@ -60,15 +66,14 @@ int   push(char *av, cmd **list) {
 }
 
 int   add_arg(char *av, cmd *elem) {
-	printf("add arg: %s\n", av);
-
-	char **new_argv = malloc(sizeof(char*) * (elem->argc + 1));
+	char **new_argv = malloc(sizeof(char*) * (elem->argc + 2));
 	if (!new_argv)
 		return KO;
 	for(int i = 0; i < elem->argc; i++) {
 		new_argv[i] = elem->argv[i];
 	}
 	new_argv[elem->argc] = av;
+	new_argv[elem->argc + 1] = NULL;
 	free(elem->argv);
 	elem->argv = new_argv;
 	elem->argc++;
@@ -84,7 +89,6 @@ int   parse_arg(char *av, cmd **list) {
 		what = PIPE;
 
 	if ((what == BREAK || what == PIPE) && !*list) {
-		printf("\033[0;35m semicolon or pipe at the beginning\033[0m\n");
 		return OK;
 	} else if (what != BREAK && what != PIPE && (!*list || (*list)->type != END)) {
 		return push(av, list);
@@ -97,65 +101,73 @@ int   parse_arg(char *av, cmd **list) {
 }
 
 int   child(cmd *elem, char **env) {
-  int ret;
-
-  if (elem->type == PIPE && dup2(elem->pipes[IN], STDOUT) < 0)
-    return KO;
-  if (elem->prev && elem->previous->type == PIPE && dup2(elem->pipes[OUT], STDIN) < 0)
-    return KO;
-  if ((ret = execve(elem->args[0], elem->args, env)) < 0) {
-    // show errors
-  }
-  return ret;
+	//	reassign pipe's in to stdout (if output should go to pipe)
+	if (elem->type == PIPE && dup2(elem->pipes[IN], STDOUT_FILENO) < 0) {
+		print_err("error: fatal\n"); /* dup2 fail */
+		exit(KO);
+	}
+	//	reassign pipe's out to stdin (if input should come from the pipe)
+	if (elem->prev && elem->prev->type == PIPE && dup2(elem->prev->pipes[OUT], STDIN_FILENO) < 0) {
+		print_err("error: fatal\n"); /* dup2 fail */
+		exit(KO);
+	}
+	int ret = execve(elem->argv[0], elem->argv, env);
+	print_err("error: cannot execute "); /* execve fail */
+	print_err(elem->argv[0]);
+	print_err("\n");
+	exit(ret);
 }
 
-int   parent(cmd *elem, int pid, int pipe_on) {
-  int status;
+int   parent(cmd *elem, pid_t pid, int pipe_on) {
+	int status;
+	int ret = KO;
 
-  waitpid(pid, &status, 0);
-  
-  if (pipe_on) {
-    close(elem->pipes[IN]);
-    if (! elem->next || elem->type == BREAK)
-      close(elem->pipes[OUT]);
-  }
-  if (elem->prev && elem->prev->type = PIPE)
-    close(elem->prev->pipes[OUT]);
-  if (WIFEXITED(status))
-			ret = WEXITSTATUS(status);
-  return ret;
+	waitpid(pid, &status, 0);
+
+	if (pipe_on) {
+		close(elem->pipes[IN]);
+		if (! elem->next || elem->type == BREAK)
+			close(elem->pipes[OUT]);
+	}
+	if (elem->prev && elem->prev->type == PIPE)
+		close(elem->prev->pipes[OUT]);
+	if (WIFEXITED(status))
+		ret = WEXITSTATUS(status);
+	return ret;
+}
+
+int	my_cd(cmd *elem) {
+	return OK;
 }
 
 int   exec(cmd *elem, char **env) {
-  if (!elem || elem->argc < 1) {
-    return OK;
-  } else if (strcmp(elem->argv[0], "cd") == 0) {
-    return (my_cd(elem));
-  } else {
-    
-    int ret = KO;
-    int pipe_on = 0;
+	if (!elem || elem->argc < 1) {
+		return OK;
+	} else if (strcmp(elem->argv[0], "cd") == 0) {
+		return (my_cd(elem));
+	} else {
+		int pipe_on = 0;
 
-    if (elem->type == PIPE || (elem->prev && elem->prev->type == PIPE)) {
-        int pipe_on = 1;
-        if (pipe(elem->pipes))
-          return KO;
-    }
+		if (elem->type == PIPE || (elem->prev && elem->prev->type == PIPE)) {
+			pipe_on = 1;
+			if (pipe(elem->pipes)) {
+				print_err("error: fatal\n"); /* pipe fail */
+				return KO;
+			}
+		}
 
-    pid = fork();
-    
-    if (pid < 0) {
-      return KO;
-    } else if (pid == 0) {
-      exit(child(elem, env));
-    } else {
-      parent(elem, pid, pipe_on);
-    }
-  }
-  return ret;
+		pid_t pid = fork();
+
+		if (pid < 0) {
+			print_err("error: fatal\n"); /* fork fail */
+			return KO;
+		} else if (pid == 0) {
+			exit(child(elem, env));
+		} else {
+			return parent(elem, pid, pipe_on);
+		}
+	}
 }
-
-
 
 int   main(int ac, char **av, char **env) {
 	cmd *list = NULL;
@@ -163,6 +175,7 @@ int   main(int ac, char **av, char **env) {
 
 	for (int i = 1; i < ac; i++) {
 		if (parse_arg(av[i], &list) == KO) {
+			print_err("error: fatal\n"); /* malloc fail */
 			free_list(list);
 			return(KO);
 		} else if (start_ptr == NULL) {
