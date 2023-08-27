@@ -14,12 +14,6 @@
 #define PIPE 1
 #define BREAK 2
 
-#ifndef TEST
-#define TEST 0
-#else
-#define TEST 1
-#endif
-
 typedef struct s_list_elem {
 	int     type;
 	int     pipes[2];
@@ -194,9 +188,6 @@ int   main(int ac, char **av, char **env) {
 		ret = exec(p, env);
 	}
 	free_list(list);
-
-	if (TEST)
-		sleep(3);
 
 	return ret;
 }

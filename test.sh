@@ -28,22 +28,8 @@ run_and_compare() {
     fi
         done
     
-    # async run with array of args, save output and retrieve process pid
-    (./microshell "${words[@]}") > microshell_output.txt & pid=$!
-    # wait, while process will reach a pause before the end of execution
-    sleep 1
-
-    # count open fd's
-    fd_count=$(ls /proc/$pid/fd | wc -l)
-    # substract fd's that are open by default
-    fd_count=$((fd_count - DEFAULT_FD))
-    # print error or success
-    if [ "$fd_count" -ne 0 ]; then
-        echo -e "${RED}/proc/$pid/fd open file descriptors: KO${NC}"
-    else
-        echo -e "${GREEN}/proc/$pid/fd open file descriptors: OK${NC}"
-    fi
-
+    ./microshell "${words[@]}" > microshell_output.txt & pid=$!
+   
     # perform valgrind check
     valgrind_output=$(valgrind --leak-check=full --show-leak-kinds=all ./microshell "${words[@]}" 2>&1)
 
@@ -55,11 +41,14 @@ run_and_compare() {
         echo "$valgrind_output"
     fi
 
+    # perform valgrind check
+    valgrind_output=$(valgrind -q --track-fds=all ./microshell "${words[@]}" 2>&1)
     # valgrind fd check
-    if [[ $valgrind_output == *"Open file descriptor"* ]]; then
-        echo -e "${RED}Valgrind open file descriptors: KO${NC}"
-    else
+    if [[ $valgrind_output == *"FILE DESCRIPTORS: 3 open (3 std) at exit"* ]]; then
         echo -e "${GREEN}Valgrind open file descriptors: OK${NC}"
+    else
+        echo -e "${RED}Valgrind open file descriptors: KO${NC}"
+        echo "$valgrind_output"
     fi
 
     # if eval commend succedded
@@ -82,6 +71,7 @@ run_and_compare() {
 }
 
 gcc -Wall -Wextra -Werror microshell.c -D TEST=1 -o microshell
+gcc -Wall -Wextra -Werror microshell.c -o microshell_no_sleep
 
 run_and_compare '/bin/ls | /usr/bin/grep "shell" ; /bin/echo "done!"'
 run_and_compare '/bin/ls | /bin/ls | /bin/ls | /bin/ls | /bin/ls | /bin/ls | /bin/ls | /bin/ls '
