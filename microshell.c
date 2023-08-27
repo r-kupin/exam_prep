@@ -137,7 +137,14 @@ int   parent(cmd *elem, pid_t pid, int pipe_on) {
 }
 
 int	my_cd(cmd *elem) {
-    (void)elem;
+    if (elem->argc != 2 || !elem->argv[1]) {
+        print_err("error: cd: bad arguments\n");
+        return KO;
+    } else if (chdir(elem->argv[1]) == -1) {
+        print_err("error: cd: cannot change directory to ");
+        print_err(elem->argv[1]);
+        print_err("\n");
+    }
 	return OK;
 }
 
