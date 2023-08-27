@@ -14,6 +14,12 @@
 #define PIPE 1
 #define BREAK 2
 
+#ifndef TEST
+#define TEST 0
+#else
+#define TEST 1
+#endif
+
 typedef struct s_list_elem {
 	int     type;
 	int     pipes[2];
@@ -137,6 +143,7 @@ int   parent(cmd *elem, pid_t pid, int pipe_on) {
 }
 
 int	my_cd(cmd *elem) {
+    (void)elem;
 	return OK;
 }
 
@@ -162,7 +169,7 @@ int   exec(cmd *elem, char **env) {
 			print_err("error: fatal\n"); /* fork fail */
 			return KO;
 		} else if (pid == 0) {
-			exit(child(elem, env));
+			return child(elem, env);
 		} else {
 			return parent(elem, pid, pipe_on);
 		}
@@ -172,6 +179,7 @@ int   exec(cmd *elem, char **env) {
 int   main(int ac, char **av, char **env) {
 	cmd *list = NULL;
 	cmd *start_ptr = NULL;
+    int ret = OK;
 
 	for (int i = 1; i < ac; i++) {
 		if (parse_arg(av[i], &list) == KO) {
@@ -183,11 +191,12 @@ int   main(int ac, char **av, char **env) {
 		}
 	}
 	for (cmd *p = start_ptr; p != NULL; p = p->next) {
-		if (exec(p, env) == KO) {
-			free_list(list);
-			return(KO);
-		}
+		ret = exec(p, env);
 	}
 	free_list(list);
-	return OK;
+
+	if (TEST)
+		sleep(3);
+
+	return ret;
 }
